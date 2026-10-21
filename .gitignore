@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Віртуальне оточення
+.venv/
+venv/
+
+# Секрети та локальні дані демо
+.keys/
+audit.db
+.env

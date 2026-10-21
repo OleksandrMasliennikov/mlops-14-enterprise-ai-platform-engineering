@@ -1,0 +1,93 @@
+// Архітектура telco-platform-lite (Тема 14, вправа 1).
+// Рендер: dot -Tpng -Gdpi=150 diagram.dot -o diagram.png
+// Розкладка зверху вниз: ліва колонка — control plane, центр — data plane (рівні 4 → 1), праворуч — зовнішні інструменти.
+digraph platform {
+  graph [rankdir=TB, fontname="Noto Sans", nodesep=0.9, ranksep=0.75,
+         newrank=true, compound=true, splines=spline, bgcolor="white", pad=0.4,
+         label=<<B>telco-platform-lite: шлях запиту, рівні та межі довіри</B><BR/>
+<FONT POINT-SIZE="12">синя лінія ①–⑥ — шлях запиту · фіолетовий пунктир — керування з control plane · <FONT COLOR="#c53030"><B>червоне TB1–TB3</B></FONT> — межі довіри</FONT>>,
+         labelloc=t, fontsize=20];
+  node  [fontname="Noto Sans", fontsize=12, shape=box, style="rounded,filled", fillcolor="white", color="#555555", margin="0.18,0.10"];
+  edge  [fontname="Noto Sans", fontsize=11, color="#555555", arrowsize=0.8];
+
+  // ---------- Інтернет ----------
+  subgraph cluster_internet {
+    label=<<B>Інтернет (недовірена зона)</B>>; style="rounded,dashed"; color="#999999"; fontcolor="#555555"; fontsize=13;
+    client [label=<<B>Клієнт</B><BR/>менеджер утримання<BR/>(tenant: telco-crm)>, fillcolor="#f2f2f2"];
+  }
+
+  // ---------- Control plane (ліва колонка) ----------
+  subgraph cluster_cp {
+    label=<<B>CONTROL PLANE</B><BR/>рідкісні зміни, кожна через PR / аудит>;
+    style="rounded,filled"; fillcolor="#f3eefb"; color="#7a4fbf"; penwidth=2; fontcolor="#4b2a86"; fontsize=14;
+    idp  [label=<<B>IdP</B><BR/>видає JWT RS256<BR/>(security.py)>];
+    git  [label=<<B>Git: політики як код</B><BR/>rbac.yaml (ролі → scopes)<BR/>config.py (guardrails, бюджети)>];
+    cicd [label=<<B>IDP / CI-CD</B><BR/>idp_validate.py, маніфести<BR/>CI-gate картки моделі>];
+    idp -> git -> cicd [style=invis];
+  }
+
+  // ---------- Data plane (центр) ----------
+  subgraph cluster_dp {
+    label=<<B>DATA PLANE</B> — високе навантаження, обробка запитів>;
+    style="rounded,filled"; fillcolor="#eef5fc"; color="#2b6cb0"; penwidth=2; fontcolor="#1d4f85"; fontsize=14; labeljust=r; labelloc=b;
+
+    subgraph cluster_platform {
+      label=<<B>Рівень 4 · ПЛАТФОРМА</B>>; labeljust=r; style="rounded,filled"; fillcolor="#ffffff"; color="#2b6cb0"; fontcolor="#1d4f85"; fontsize=13;
+      gw [shape=plain, label=<
+        <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#2b6cb0" BGCOLOR="#dbeafe" STYLE="rounded">
+          <TR><TD COLSPAN="2"><B>API Gateway</B> (gateway.py)</TD></TR>
+          <TR><TD ALIGN="LEFT">② authn</TD><TD ALIGN="LEFT">перевірка JWT, tenant лише з токена → 401</TD></TR>
+          <TR><TD ALIGN="LEFT" BGCOLOR="#fde68a"><B>③ authz</B></TD><TD ALIGN="LEFT" BGCOLOR="#fde68a"><B>перевірка прав: роль → scope → 403</B></TD></TR>
+          <TR><TD ALIGN="LEFT">    rate limit</TD><TD ALIGN="LEFT">token bucket на орендаря → 429</TD></TR>
+          <TR><TD ALIGN="LEFT">    budget</TD><TD ALIGN="LEFT">ліміт витрат орендаря → блок / алерт 90%</TD></TR>
+          <TR><TD ALIGN="LEFT">④ routing</TD><TD ALIGN="LEFT">до сервісних рівнів</TD></TR>
+          <TR><TD ALIGN="LEFT">⑤⑥ accounting</TD><TD ALIGN="LEFT">облік токенів → USD, запис аудиту</TD></TR>
+        </TABLE>>];
+      cost  [label=<<B>💲 Облік витрат</B><BR/>cost.py: токени → USD<BR/>бюджети орендарів<BR/><I>прод: Redis / ledger</I>>, fillcolor="#fef3c7", color="#b7791f"];
+      audit [shape=cylinder, label=<<B>Сховище аудиту</B><BR/>append-only, request_id,<BR/>prompt_hash, customer_ref<BR/><I>демо: SQLite · прод: ClickHouse/WORM</I>>, fillcolor="#dcfce7", color="#2f855a"];
+    }
+
+    subgraph cluster_services {
+      label=<<B>Сервісні рівні</B>>; style="rounded"; color="#2b6cb0"; fontcolor="#1d4f85"; fontsize=13;
+      agent [ordering=out, label=<<B>Рівень 3 · АГЕНТ</B><BR/>retention agent: граф вузлів<BR/>guardrail у коді (знижка ≤ MAX)<BR/>→ human approval>, fillcolor="#fde2e2", color="#c53030"];
+      ml    [label=<<B>Рівень 1 · ML</B><BR/>churn-predictor<BR/>+ картка моделі>, fillcolor="#e0f2fe", color="#2b6cb0"];
+      llm   [label=<<B>Рівень 2 · LLM</B><BR/>RAG (колекція орендаря)<BR/>+ пояснення (vLLM / заглушка)>, fillcolor="#e9e3fb", color="#6b46c1"];
+    }
+  }
+
+  // ---------- Зовнішні інструменти (праворуч) ----------
+  subgraph cluster_ext {
+    label=<<B>Зовнішні інструменти</B>>; style="rounded,dashed"; color="#999999"; fontcolor="#555555"; fontsize=13;
+    tools [label=<<B>MCP-інструменти</B><BR/>offer catalog, CRM>, fillcolor="#f2f2f2"];
+  }
+
+  // ---------- Шлях запиту ----------
+  client -> gw [label=<  <B>① HTTPS + JWT</B><BR/>  <FONT COLOR="#c53030"><B>TB1: інтернет → шлюз</B></FONT>>,
+                color="#1d4ed8", penwidth=2.5, fontcolor="#1d4ed8"];
+  gw -> agent  [lhead=cluster_services, label=<  <B>④</B> /v1/agents/…/invoke<BR/>  /v1/models/…/predict>,
+                color="#1d4ed8", penwidth=2.5, fontcolor="#1d4ed8"];
+  gw -> cost   [label=<  <B>⑤</B> cost_usd>, color="#b7791f", penwidth=2, fontcolor="#b7791f"];
+  gw -> audit  [label=<  <B>⑥</B> audit.emit(…)>, color="#2f855a", penwidth=2.5, fontcolor="#2f855a"];
+  agent -> ml  [label="  score + SHAP", color="#1d4ed8"];
+  agent -> llm [label="  пояснення", color="#1d4ed8"];
+  agent -> tools [label=<<FONT COLOR="#c53030"><B>TB3: агент → зовн. інструменти</B></FONT><BR/>call_tool (allow-list)>,
+                  color="#c53030", penwidth=2.5, fontcolor="#c53030"];
+
+  // ---------- Керування з control plane (TB2) ----------
+  idp  -> gw    [style=dashed, color="#7a4fbf", fontcolor="#7a4fbf",
+                 label="публічний ключ"];
+  git  -> gw    [style=dashed, color="#7a4fbf", fontcolor="#7a4fbf", label=<RBAC-політика&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<BR/><FONT COLOR="#c53030"><B>TB2: control → data plane</B></FONT>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;>];
+  git  -> agent [style=dashed, color="#7a4fbf", fontcolor="#7a4fbf", label=<MAX_AUTO_&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<BR/>DISCOUNT&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;>];
+  cicd -> agent [lhead=cluster_services, style=dashed, color="#7a4fbf", fontcolor="#7a4fbf", label=<деплой сервісів<BR/>за маніфестом>];
+
+  // ---------- Розкладка ----------
+  { rank=same; client; idp; }
+  { rank=same; git; gw; }
+  { rank=same; cost; audit; cicd; }
+  { rank=same; agent; }
+  { rank=same; ml; llm; tools; }
+  // порядок зліва направо в одному ранзі
+  cost -> audit [style=invis];
+  ml -> llm -> tools [style=invis];
+  cicd -> tools [style=invis, weight=10];
+}

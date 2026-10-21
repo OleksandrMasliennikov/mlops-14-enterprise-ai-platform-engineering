@@ -28,3 +28,55 @@ dot -Tpng -Gdpi=130 diagram.dot -o diagram.png
 | Межі довіри | Червоні мітки: **TB1** інтернет → шлюз, **TB2** control plane → data plane (IdP, Git-політики, CI/CD), **TB3** агент → зовнішні MCP-інструменти |
 
 Структура схеми відповідає еталону з [PLAYBOOK_UA.md](PLAYBOOK_UA.md) (п. 5). Діаграму намальовано в Graphviz, а не в draw.io чи Excalidraw: так вона зберігається як код, і її легко переглядати в PR.
+
+## Завдання 2. Нова роль «auditor»
+
+**Зміна політики** у [policies/rbac.yaml](policies/rbac.yaml). Ролі `auditor` дано лише одне право, `audit:read`:
+
+```diff
+@@ -14,3 +14,5 @@ roles:
+     - "billing:read"
+     - "audit:read"
+     - "approvals:decide"
++  auditor:
++    - "audit:read"
+```
+
+**Випуск токена** роллю IdP (`security.py`). Токен підписується приватним ключем із `.keys/`, а шлюз перевіряє його публічним ключем:
+
+```bash
+source .venv/bin/activate
+uvicorn platform_lite.gateway:app --port 8000      # окремий термінал; політика читається при старті
+
+AUDITOR=$(python -c "from platform_lite import security as s; print(s.issue_token('ivan@telco.com','telco-crm','auditor'))")
+CID=C1224                                          # клієнт орендаря telco-crm
+```
+
+**Три запити та їхні результати:**
+
+```text
+$ curl -s -w '\nHTTP %{http_code}\n' localhost:8000/v1/audit/customers/$CID -H "Authorization: Bearer $AUDITOR"
+{"customer_id":"C1224","events":[]}
+HTTP 200
+
+$ curl -s -w '\nHTTP %{http_code}\n' -X POST localhost:8000/v1/models/churn-predictor/predict \
+    -H "Authorization: Bearer $AUDITOR" -H "Content-Type: application/json" -d '{"customer_id":"C1224"}'
+{"detail":"Role 'auditor' lacks scope 'models:invoke'"}
+HTTP 403
+
+$ curl -s -w '\nHTTP %{http_code}\n' localhost:8000/v1/billing/usage -H "Authorization: Bearer $AUDITOR"
+{"detail":"Role 'auditor' lacks scope 'billing:read'"}
+HTTP 403
+```
+
+**Висновок.** Аутентифікацію (401) auditor проходить, а авторизацію шлюз виконує за scope ролі з YAML:
+
+- читати аудит дозволено;
+- викликати модель і переглядати білінг заборонено, і в тексті 403 видно, якого саме scope бракує.
+
+Нову роль додано без змін у коді, лише через політику в Git.
+
+Під час виконання виникли дві проблеми:
+
+- У першій версії ролі були ще `models:read`, `agents:read` і `billing:read`. Через це `/v1/billing/usage` повертав 200 замість 403, тому роль урізано до `audit:read`.
+- Один із запитів повернув 401. У журналі аудиту для нього записано шлях `/v1/audit/customers/` і рішення `401: DecodeError`, тобто змінні `$AUDITOR` і `$CID` були порожні: їх задали в іншому терміналі. Змінні оболонки діють лише в тому терміналі, де їх створили.

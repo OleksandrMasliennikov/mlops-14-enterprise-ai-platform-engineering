@@ -14,3 +14,5 @@ roles:
     - "billing:read"
     - "audit:read"
     - "approvals:decide"
+  auditor:
+    - "audit:read"
